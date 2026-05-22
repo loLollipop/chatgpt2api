@@ -746,7 +746,7 @@ func (c *Client) prepareOfficialImageConversation(ctx context.Context, prompt st
 func officialImageModelSlug(model string) string {
 	switch strings.TrimSpace(model) {
 	case util.ImageModelGPT:
-		return "gpt-5-5"
+		return "gpt-5-3"
 	case util.ImageModelCodex:
 		return util.ImageModelCodex
 	case "", util.ImageModelAuto:

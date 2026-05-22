@@ -169,7 +169,7 @@ func TestOfficialImageModelSlug(t *testing.T) {
 	}{
 		{model: "", want: "auto"},
 		{model: "auto", want: "auto"},
-		{model: "gpt-image-2", want: "gpt-5-5"},
+		{model: "gpt-image-2", want: "gpt-5-3"},
 		{model: "codex-gpt-image-2", want: "codex-gpt-image-2"},
 		{model: "gpt-5.5", want: "auto"},
 	} {
@@ -275,11 +275,11 @@ func TestStreamResponsesImageUsesOfficialPrepareAndConversationRoutes(t *testing
 	if results[0].Result != png1x1 {
 		t.Fatalf("result = %q, want %q", results[0].Result, png1x1)
 	}
-	if prepareBody["model"] != "gpt-5-5" {
-		t.Fatalf("prepare model = %#v, want gpt-5-5", prepareBody["model"])
+	if prepareBody["model"] != "gpt-5-3" {
+		t.Fatalf("prepare model = %#v, want gpt-5-3", prepareBody["model"])
 	}
-	if streamBody["model"] != "gpt-5-5" {
-		t.Fatalf("stream model = %#v, want gpt-5-5", streamBody["model"])
+	if streamBody["model"] != "gpt-5-3" {
+		t.Fatalf("stream model = %#v, want gpt-5-3", streamBody["model"])
 	}
 	messages := streamBody["messages"].([]any)
 	message := messages[0].(map[string]any)
