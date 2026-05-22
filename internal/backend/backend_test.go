@@ -220,13 +220,7 @@ func TestStreamResponsesImageUsesOfficialPrepareAndConversationRoutes(t *testing
 		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/conversation/conv-1":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"mapping":{"node-1":{"message":{"author":{"role":"tool"},"metadata":{},"content":{"content_type":"multimodal_text","parts":[{"content_type":"image_asset_pointer","asset_pointer":"file-service://file_abc"}]}}}}}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/files/download/file_abc":
-			if got := r.URL.Query().Get("conversation_id"); got != "conv-1" {
-				t.Fatalf("conversation_id = %q", got)
-			}
-			if got := r.URL.Query().Get("inline"); got != "false" {
-				t.Fatalf("inline = %q", got)
-			}
+		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/files/file_abc/download":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"download_url":"` + server.URL + `/download/file_abc.png"}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/download/file_abc.png":
@@ -340,10 +334,7 @@ func TestStreamResponsesImageUsesOfficialContinuationPointers(t *testing.T) {
 			_, _ = w.Write([]byte("data: {\"v\":{\"message\":{\"id\":\"msg-assist-new\",\"author\":{\"role\":\"assistant\"},\"content\":{\"content_type\":\"text\",\"parts\":[\"好的\"]}}},\"conversation_id\":\"conv-old\"}\n\n"))
 			_, _ = w.Write([]byte("data: {\"p\":\"\",\"o\":\"add\",\"v\":{\"message\":{\"author\":{\"role\":\"tool\",\"metadata\":{}},\"content\":{\"content_type\":\"multimodal_text\",\"parts\":[{\"content_type\":\"image_asset_pointer\",\"asset_pointer\":\"sediment://file_follow\"}]}},\"conversation_id\":\"conv-old\"}}\n\n"))
 			_, _ = w.Write([]byte("data: {\"type\":\"message_stream_complete\",\"conversation_id\":\"conv-old\"}\n\n"))
-		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/files/download/file_follow":
-			if got := r.URL.Query().Get("conversation_id"); got != "conv-old" {
-				t.Fatalf("conversation_id = %q", got)
-			}
+		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/conversation/conv-old/attachment/file_follow/download":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"download_url":"` + server.URL + `/download/file_follow.png"}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/download/file_follow.png":
@@ -450,7 +441,7 @@ func TestStreamResponsesImageUsesCodeInterpreterAssetDownload(t *testing.T) {
 			_, _ = w.Write(imageBytes)
 		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/conversation/conv-ci":
 			t.Fatalf("unexpected conversation poll for direct interpreter asset")
-		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/backend-api/files/download/"):
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/backend-api/files/") && strings.HasSuffix(r.URL.Path, "/download"):
 			t.Fatalf("unexpected file download for interpreter asset: %s", r.URL.Path)
 		default:
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
@@ -667,10 +658,7 @@ func TestStreamResponsesImageUsesDirectSSEImageAssetPointer(t *testing.T) {
 			pollCount++
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"mapping":{}}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/files/download/file_direct":
-			if got := r.URL.Query().Get("conversation_id"); got != "conv-direct" {
-				t.Fatalf("conversation_id = %q", got)
-			}
+		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/conversation/conv-direct/attachment/file_direct/download":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"download_url":"` + server.URL + `/download/file_direct.png"}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/download/file_direct.png":
@@ -728,10 +716,7 @@ func TestStreamResponsesImageIgnoresFalseToolInvokedForImageGenResult(t *testing
 			_, _ = w.Write([]byte("data: {\"v\":{\"message\":{\"author\":{\"role\":\"assistant\"},\"content\":{\"content_type\":\"text\",\"parts\":[\"Here is the generated image.\"]}}},\"conversation_id\":\"conv-image\"}\n\n"))
 			_, _ = w.Write([]byte("data: {\"type\":\"server_ste_metadata\",\"metadata\":{\"tool_invoked\":false,\"turn_use_case\":\"image gen\"},\"conversation_id\":\"conv-image\"}\n\n"))
 			_, _ = w.Write([]byte("data: {\"type\":\"message_stream_complete\",\"conversation_id\":\"conv-image\"}\n\n"))
-		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/files/download/file_image":
-			if got := r.URL.Query().Get("conversation_id"); got != "conv-image" {
-				t.Fatalf("conversation_id = %q", got)
-			}
+		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/conversation/conv-image/attachment/file_image/download":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"download_url":"` + server.URL + `/download/file_image.png"}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/download/file_image.png":
@@ -861,13 +846,7 @@ func TestStreamResponsesImageDoesNotTreatQueuedAssistantNoticeAsFinalText(t *tes
 			pollCount++
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"mapping":{"node-1":{"message":{"author":{"role":"tool"},"metadata":{},"content":{"content_type":"multimodal_text","parts":[{"content_type":"image_asset_pointer","asset_pointer":"file-service://file_ready"}]}}}}}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/files/download/file_ready":
-			if got := r.URL.Query().Get("conversation_id"); got != "conv-queued" {
-				t.Fatalf("conversation_id = %q", got)
-			}
-			if got := r.URL.Query().Get("inline"); got != "false" {
-				t.Fatalf("inline = %q", got)
-			}
+		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/files/file_ready/download":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"download_url":"` + server.URL + `/download/file_ready.png"}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/download/file_ready.png":
@@ -946,13 +925,10 @@ func TestStreamResponsesImagePollsAsyncImageTaskForCurrentTurn(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/conversation/conv-async":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"mapping":{"old-tool":{"message":{"id":"msg-old","author":{"role":"tool"},"create_time":20,"metadata":{"async_task_type":"image_gen","turn_exchange_id":"turn-old"},"content":{"content_type":"multimodal_text","parts":[{"content_type":"image_asset_pointer","asset_pointer":"file-service://file_old"}]}}},"current-tool":{"message":{"id":"msg-current","author":{"role":"tool"},"create_time":10,"metadata":{"async_task_type":"image_gen","image_gen_task_id":"task-current","turn_exchange_id":"turn-current","parent_id":"msg-code"},"content":{"content_type":"multimodal_text","parts":[{"content_type":"image_asset_pointer","asset_pointer":"file-service://file_current"}]}}}}}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/files/download/file_current":
-			if got := r.URL.Query().Get("conversation_id"); got != "conv-async" {
-				t.Fatalf("conversation_id = %q", got)
-			}
+		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/files/file_current/download":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"download_url":"` + server.URL + `/download/file_current.png"}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/files/download/file_old":
+		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/files/file_old/download":
 			t.Fatalf("downloaded historical image")
 		case r.Method == http.MethodGet && r.URL.Path == "/download/file_current.png":
 			w.Header().Set("Content-Type", "image/png")
@@ -1012,7 +988,7 @@ func TestStreamResponsesImageRetriesConversationPollRateLimit(t *testing.T) {
 				return
 			}
 			_, _ = w.Write([]byte(`{"mapping":{"node-1":{"message":{"author":{"role":"tool"},"metadata":{"async_task_type":"image_gen"},"content":{"content_type":"multimodal_text","parts":[{"content_type":"image_asset_pointer","asset_pointer":"file-service://file_ready"}]}}}}}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/files/download/file_ready":
+		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/files/file_ready/download":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"download_url":"` + server.URL + `/download/file_ready.png"}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/download/file_ready.png":
@@ -1236,17 +1212,8 @@ func TestResolveOfficialImageResultsRetriesTransientDownloadURL404(t *testing.T)
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/files/download/file_img":
+		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/conversation/conv-1/attachment/file_img/download":
 			urlAttempts++
-			if got := r.URL.Query().Get("conversation_id"); got != "conv-1" {
-				t.Fatalf("conversation_id = %q", got)
-			}
-			if got := r.URL.Query().Get("inline"); got != "false" {
-				t.Fatalf("inline = %q", got)
-			}
-			if got := r.Header.Get("X-OpenAI-Target-Path"); got != "/backend-api/files/download/file_img" {
-				t.Fatalf("target path = %q", got)
-			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"download_url":"` + server.URL + `/download/image.png"}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/download/image.png":
@@ -1297,17 +1264,8 @@ func TestResolveOfficialImageResultsUsesConversationScopedFileDownloadForSedimen
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/files/download/file_img":
+		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/conversation/conv-1/attachment/file_img/download":
 			fileURLAttempts++
-			if got := r.URL.Query().Get("conversation_id"); got != "conv-1" {
-				t.Fatalf("conversation_id = %q", got)
-			}
-			if got := r.URL.Query().Get("inline"); got != "false" {
-				t.Fatalf("inline = %q", got)
-			}
-			if got := r.Header.Get("X-OpenAI-Target-Path"); got != "/backend-api/files/download/file_img" {
-				t.Fatalf("target path = %q", got)
-			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"download_url":"` + server.URL + `/download/file.png"}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/download/file.png":
@@ -1347,7 +1305,7 @@ func TestResolveOfficialImageResultsAuthenticatesBackendDownloadURL(t *testing.T
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/files/download/file_img":
+		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/files/file_img/download":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"download_url":"` + server.URL + `/backend-api/estuary/content?id=file_img&sig=test"}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/backend-api/estuary/content":
