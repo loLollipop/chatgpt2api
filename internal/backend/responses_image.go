@@ -1465,8 +1465,9 @@ func (c *Client) resolveOfficialImageResults(ctx context.Context, request Respon
 			messageID = polled.MessageID
 		}
 	}
-	imageFileIDs := officialImageFileIDs(fileIDs, sedimentIDs)
-	if len(imageFileIDs) == 0 {
+	filteredFileIDs := filterOfficialImageIDs(fileIDs)
+	filteredSedimentIDs := filterOfficialImageIDs(sedimentIDs)
+	if len(filteredFileIDs) == 0 && len(filteredSedimentIDs) == 0 {
 		if strings.TrimSpace(text) != "" {
 			return []ResponsesImageEvent{{
 				Type:           "image_text_response",
@@ -1478,13 +1479,8 @@ func (c *Client) resolveOfficialImageResults(ctx context.Context, request Respon
 		}
 		return nil, nil
 	}
-	results := make([]ResponsesImageEvent, 0, len(imageFileIDs))
-	for index, fileID := range imageFileIDs {
-		data, downloadErr := c.downloadOfficialImageFile(ctx, conversationID, fileID)
-		if downloadErr != nil {
-			return nil, downloadErr
-		}
-		results = append(results, ResponsesImageEvent{
+	makeEvent := func(index int, data []byte) ResponsesImageEvent {
+		return ResponsesImageEvent{
 			Type:           "image_result",
 			ItemID:         fmt.Sprintf("image_%d", index+1),
 			MessageID:      messageID,
@@ -1495,7 +1491,26 @@ func (c *Client) resolveOfficialImageResults(ctx context.Context, request Respon
 			ConversationID: conversationID,
 			FileIDs:        append([]string(nil), fileIDs...),
 			SedimentIDs:    append([]string(nil), sedimentIDs...),
-		})
+		}
+	}
+	if len(filteredFileIDs) > 0 {
+		results := make([]ResponsesImageEvent, 0, len(filteredFileIDs))
+		for index, fileID := range filteredFileIDs {
+			data, downloadErr := c.downloadOfficialImageFile(ctx, conversationID, fileID)
+			if downloadErr != nil {
+				return nil, downloadErr
+			}
+			results = append(results, makeEvent(index, data))
+		}
+		return results, nil
+	}
+	results := make([]ResponsesImageEvent, 0, len(filteredSedimentIDs))
+	for index, sedimentID := range filteredSedimentIDs {
+		data, downloadErr := c.downloadOfficialAttachmentFile(ctx, conversationID, sedimentID)
+		if downloadErr != nil {
+			return nil, downloadErr
+		}
+		results = append(results, makeEvent(index, data))
 	}
 	return results, nil
 }
@@ -1939,25 +1954,17 @@ func (c *Client) downloadOfficialInterpreterAsset(ctx context.Context, conversat
 }
 
 func (c *Client) getOfficialFileDownloadURL(ctx context.Context, conversationID, fileID string) (string, error) {
-	conversationID = strings.TrimSpace(conversationID)
-	if conversationID == "" {
-		return "", fmt.Errorf("conversation_id is required for official image download")
-	}
-	query := urlpkg.Values{}
-	query.Set("conversation_id", conversationID)
-	query.Set("inline", "false")
-	targetPath := "/backend-api/files/download/" + urlpkg.PathEscape(fileID)
-	path := targetPath + "?" + query.Encode()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path, nil)
+	targetPath := "/backend-api/files/" + urlpkg.PathEscape(fileID) + "/download"
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+targetPath, nil)
 	for key, value := range c.headers(targetPath, map[string]string{"Accept": "application/json"}) {
 		req.Header.Set(key, value)
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", upstreamTransportError(path, err)
+		return "", upstreamTransportError(targetPath, err)
 	}
 	defer resp.Body.Close()
-	if err := ensureOK(resp, path); err != nil {
+	if err := ensureOK(resp, targetPath); err != nil {
 		return "", err
 	}
 	var data map[string]any
@@ -1973,6 +1980,62 @@ func (c *Client) downloadOfficialImageFile(ctx context.Context, conversationID, 
 		downloadURL, err := c.getOfficialFileDownloadURL(ctx, conversationID, fileID)
 		if err == nil && strings.TrimSpace(downloadURL) == "" {
 			err = fmt.Errorf("official image file %s returned empty download URL", fileID)
+		}
+		if err == nil {
+			var data []byte
+			data, err = c.downloadOfficialImage(ctx, downloadURL)
+			if err == nil {
+				return data, nil
+			}
+		}
+		lastErr = err
+		if attempt == officialImageDownloadAttempts {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(officialImageDownloadRetryDelay):
+		}
+	}
+	return nil, lastErr
+}
+
+func (c *Client) getOfficialAttachmentDownloadURL(ctx context.Context, conversationID, attachmentID string) (string, error) {
+	conversationID = strings.TrimSpace(conversationID)
+	attachmentID = strings.TrimSpace(attachmentID)
+	if conversationID == "" {
+		return "", fmt.Errorf("conversation_id is required for attachment download")
+	}
+	if attachmentID == "" {
+		return "", fmt.Errorf("attachment_id is required for attachment download")
+	}
+	targetPath := "/backend-api/conversation/" + urlpkg.PathEscape(conversationID) + "/attachment/" + urlpkg.PathEscape(attachmentID) + "/download"
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+targetPath, nil)
+	for key, value := range c.headers(targetPath, map[string]string{"Accept": "application/json"}) {
+		req.Header.Set(key, value)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", upstreamTransportError(targetPath, err)
+	}
+	defer resp.Body.Close()
+	if err := ensureOK(resp, targetPath); err != nil {
+		return "", err
+	}
+	var data map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return "", err
+	}
+	return firstNonEmpty(util.Clean(data["download_url"]), util.Clean(data["url"])), nil
+}
+
+func (c *Client) downloadOfficialAttachmentFile(ctx context.Context, conversationID, attachmentID string) ([]byte, error) {
+	var lastErr error
+	for attempt := 1; attempt <= officialImageDownloadAttempts; attempt++ {
+		downloadURL, err := c.getOfficialAttachmentDownloadURL(ctx, conversationID, attachmentID)
+		if err == nil && strings.TrimSpace(downloadURL) == "" {
+			err = fmt.Errorf("attachment %s returned empty download URL", attachmentID)
 		}
 		if err == nil {
 			var data []byte

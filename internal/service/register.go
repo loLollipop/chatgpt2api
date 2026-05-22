@@ -486,7 +486,37 @@ func (w *registerWorker) createAccount(ctx context.Context, name, birthdate stri
 }
 
 func (w *registerWorker) loginAndExchangeTokens(ctx context.Context, email, password string, mailbox map[string]any) (map[string]any, error) {
-	w.step("开始独立登录换 token")
+	// Use a fresh session + device_id for the login/token-exchange flow.
+	// After registration the original session is marked "completed" by OpenAI;
+	// reusing it for authorize → password_verify returns HTTP 409 invalid_state.
+	// See upstream issue basketikun/chatgpt2api#155.
+	w.step("开始独立登录换 token (fresh session)")
+	loginDeviceID := util.NewUUID()
+	loginJar, err := cookiejar.New(nil)
+	if err != nil {
+		return nil, err
+	}
+	authURL, _ := url.Parse(registerAuthBase)
+	if authURL != nil {
+		loginJar.SetCookies(authURL, []*http.Cookie{
+			{Name: "oai-did", Value: loginDeviceID, Domain: ".auth.openai.com", Path: "/"},
+			{Name: "oai-did", Value: loginDeviceID, Domain: "auth.openai.com", Path: "/"},
+		})
+	}
+	loginClient := &http.Client{
+		Timeout:   w.client.Timeout,
+		Transport: w.client.Transport,
+		Jar:       loginJar,
+	}
+	origClient := w.client
+	origDeviceID := w.deviceID
+	w.client = loginClient
+	w.deviceID = loginDeviceID
+	defer func() {
+		w.client = origClient
+		w.deviceID = origDeviceID
+	}()
+
 	codeVerifier, codeChallenge := generateRegisterPKCE()
 	values := registerAuthorizeParams(email, w.deviceID, registerRandomToken(), registerRandomToken(), codeChallenge)
 	authorizeLogin := func() error {
