@@ -534,32 +534,13 @@ func (w *registerWorker) loginAndExchangeTokens(ctx context.Context, email, pass
 	}
 	w.step("登录 authorize 完成")
 
-	status, payload, err := w.submitLoginEmail(ctx, email)
-	if err != nil {
-		return nil, err
-	}
-	if status == http.StatusConflict {
-		w.step("邮箱提交 invalid_state，重新 authorize 后重试")
-		if err := authorizeLogin(); err != nil {
-			return nil, err
-		}
-		status, payload, err = w.submitLoginEmail(ctx, email)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if status != http.StatusOK {
-		return nil, fmt.Errorf("email_submit_http_%d%s", status, registerResponseDetail(payload))
-	}
-	w.step("邮箱提交完成")
-
 	headers := w.jsonHeaders(registerAuthBase + "/log-in/password")
 	token, err := w.buildSentinelToken(ctx, "password_verify")
 	if err != nil {
 		return nil, err
 	}
 	headers["openai-sentinel-token"] = token
-	status, payload, err = w.request(ctx, http.MethodPost, registerAuthBase+"/api/accounts/password/verify", map[string]any{
+	status, payload, err := w.request(ctx, http.MethodPost, registerAuthBase+"/api/accounts/password/verify", map[string]any{
 		"password": password,
 	}, headers, false)
 	if err != nil {
@@ -624,22 +605,6 @@ func (w *registerWorker) loginAndExchangeTokens(ctx context.Context, email, pass
 		"refresh_token": refreshToken,
 		"id_token":      idToken,
 	}, nil
-}
-
-func (w *registerWorker) submitLoginEmail(ctx context.Context, email string) (int, map[string]any, error) {
-	w.step("开始提交邮箱")
-	headers := w.jsonHeaders(registerAuthBase + "/log-in?usernameKind=email")
-	token, err := w.buildSentinelToken(ctx, "authorize_continue")
-	if err != nil {
-		return 0, nil, err
-	}
-	headers["openai-sentinel-token"] = token
-	return w.request(ctx, http.MethodPost, registerAuthBase+"/api/accounts/authorize/continue", map[string]any{
-		"username": map[string]any{
-			"kind":  "email",
-			"value": email,
-		},
-	}, headers, false)
 }
 
 func (w *registerWorker) followConsentForCode(ctx context.Context, continueURL string) (string, error) {
@@ -858,14 +823,19 @@ func (w *registerWorker) requestRawJSON(ctx context.Context, method, target stri
 		if err != nil {
 			lastErr = err
 			if attempt < 2 {
-				time.Sleep(time.Second)
+				time.Sleep(time.Duration(attempt+1) * time.Second)
 				continue
 			}
 			return 0, nil, err
 		}
-		defer resp.Body.Close()
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if registerRetryableStatus(resp.StatusCode) && attempt < 2 {
+			time.Sleep(time.Duration(attempt+1) * time.Second)
+			continue
+		}
 		payload := map[string]any{}
-		_ = util.DecodeJSON(resp.Body, &payload)
+		_ = json.Unmarshal(respBody, &payload)
 		return resp.StatusCode, payload, nil
 	}
 	if lastErr != nil {
@@ -880,7 +850,6 @@ func (w *registerWorker) request(ctx context.Context, method, target string, pay
 }
 
 func (w *registerWorker) requestDetailed(ctx context.Context, method, target string, payload any, headers map[string]string, followRedirects bool) (int, map[string]any, http.Header, error) {
-	var body io.Reader
 	var bodyData []byte
 	if payload != nil {
 		data, err := json.Marshal(payload)
@@ -899,10 +868,9 @@ func (w *registerWorker) requestDetailed(ctx context.Context, method, target str
 	}
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
-		if payload != nil {
+		var body io.Reader
+		if bodyData != nil {
 			body = bytes.NewReader(bodyData)
-		} else {
-			body = nil
 		}
 		req, err := http.NewRequestWithContext(ctx, method, target, body)
 		if err != nil {
@@ -917,20 +885,22 @@ func (w *registerWorker) requestDetailed(ctx context.Context, method, target str
 		if err != nil {
 			lastErr = err
 			if attempt < 2 {
-				time.Sleep(time.Second)
+				time.Sleep(time.Duration(attempt+1) * time.Second)
 				continue
 			}
 			return 0, nil, nil, err
 		}
-		defer resp.Body.Close()
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if registerRetryableStatus(resp.StatusCode) && attempt < 2 {
+			time.Sleep(time.Duration(attempt+1) * time.Second)
+			continue
+		}
 		payloadMap := map[string]any{}
 		if strings.Contains(resp.Header.Get("Content-Type"), "application/json") {
-			_ = util.DecodeJSON(resp.Body, &payloadMap)
-		} else {
-			data, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-			if len(data) > 0 {
-				payloadMap["body"] = string(data)
-			}
+			_ = json.Unmarshal(respBody, &payloadMap)
+		} else if len(respBody) > 0 {
+			payloadMap["body"] = string(respBody)
 		}
 		return resp.StatusCode, payloadMap, resp.Header.Clone(), nil
 	}
@@ -938,6 +908,10 @@ func (w *registerWorker) requestDetailed(ctx context.Context, method, target str
 		return 0, nil, nil, lastErr
 	}
 	return 0, nil, nil, fmt.Errorf("request failed")
+}
+
+func registerRetryableStatus(status int) bool {
+	return status == 429 || status == 500 || status == 502 || status == 503 || status == 504
 }
 
 func (w *registerWorker) requestForm(ctx context.Context, target string, form url.Values) (int, map[string]any, error) {
@@ -960,14 +934,19 @@ func (w *registerWorker) requestForm(ctx context.Context, target string, form ur
 		if err != nil {
 			lastErr = err
 			if attempt < 2 {
-				time.Sleep(time.Second)
+				time.Sleep(time.Duration(attempt+1) * time.Second)
 				continue
 			}
 			return 0, nil, err
 		}
-		defer resp.Body.Close()
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if registerRetryableStatus(resp.StatusCode) && attempt < 2 {
+			time.Sleep(time.Duration(attempt+1) * time.Second)
+			continue
+		}
 		payload := map[string]any{}
-		_ = util.DecodeJSON(resp.Body, &payload)
+		_ = json.Unmarshal(respBody, &payload)
 		return resp.StatusCode, payload, nil
 	}
 	if lastErr != nil {
