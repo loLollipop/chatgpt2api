@@ -1230,15 +1230,13 @@ func registerMailRequestJSON(client *http.Client, method, target string, headers
 }
 
 func registerMailRequestAny(client *http.Client, method, target string, headers map[string]string, query map[string]string, payload any, expected ...int) (any, error) {
-	var bodyReader *strings.Reader
-	if payload == nil {
-		bodyReader = strings.NewReader("")
-	} else {
+	var bodyBytes []byte
+	if payload != nil {
 		data, err := json.Marshal(payload)
 		if err != nil {
 			return nil, err
 		}
-		bodyReader = strings.NewReader(string(data))
+		bodyBytes = data
 	}
 	if len(query) > 0 {
 		parsed, err := url.Parse(target)
@@ -1254,31 +1252,54 @@ func registerMailRequestAny(client *http.Client, method, target string, headers 
 		parsed.RawQuery = values.Encode()
 		target = parsed.String()
 	}
-	req, err := http.NewRequest(method, target, bodyReader)
-	if err != nil {
-		return nil, err
-	}
-	for key, value := range headers {
-		if strings.TrimSpace(value) != "" {
-			req.Header.Set(key, value)
+	const maxRetries = 3
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		var body io.Reader
+		if bodyBytes != nil {
+			body = strings.NewReader(string(bodyBytes))
+		} else {
+			body = strings.NewReader("")
 		}
+		req, err := http.NewRequest(method, target, body)
+		if err != nil {
+			return nil, err
+		}
+		for key, value := range headers {
+			if strings.TrimSpace(value) != "" {
+				req.Header.Set(key, value)
+			}
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			if attempt < maxRetries-1 {
+				time.Sleep(time.Duration(attempt+1) * time.Second)
+				continue
+			}
+			return nil, err
+		}
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if registerMailRetryableStatus(resp.StatusCode) && attempt < maxRetries-1 {
+			time.Sleep(time.Duration(attempt+1) * time.Second)
+			continue
+		}
+		if !registerExpectedStatus(resp.StatusCode, expected...) {
+			return nil, fmt.Errorf("mail request failed: %s %s -> HTTP %d", method, target, resp.StatusCode)
+		}
+		if resp.StatusCode == http.StatusNoContent {
+			return map[string]any{}, nil
+		}
+		var data any
+		if err := json.Unmarshal(respBody, &data); err != nil {
+			return nil, err
+		}
+		return data, nil
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if !registerExpectedStatus(resp.StatusCode, expected...) {
-		return nil, fmt.Errorf("mail request failed: %s %s -> HTTP %d", method, target, resp.StatusCode)
-	}
-	if resp.StatusCode == http.StatusNoContent {
-		return map[string]any{}, nil
-	}
-	var data any
-	if err := util.DecodeJSON(resp.Body, &data); err != nil {
-		return nil, err
-	}
-	return data, nil
+	return nil, fmt.Errorf("mail request failed after %d retries: %s %s", maxRetries, method, target)
+}
+
+func registerMailRetryableStatus(status int) bool {
+	return status == 429 || status == 500 || status == 502 || status == 503 || status == 504
 }
 
 func registerExpectedStatus(status int, expected ...int) bool {
